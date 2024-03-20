@@ -91,12 +91,12 @@ private:
         if (GetMouseWheel() > 0)
         {
             std::cout << "mouse up\n";
-            new_zoom = new_zoom * 1.3;
+            new_zoom = new_zoom * 1.25;
         }
         else if (GetMouseWheel() < 0)
         {
             std::cout << "mouse down\n";
-            new_zoom = new_zoom * 0.7;
+            new_zoom = new_zoom * 0.8;
             if (new_zoom < 1.0)
             {
                 new_zoom = 1;
@@ -108,6 +108,21 @@ private:
             int32_t mouse_y = GetMouseY();
             fmt::print("mouse position {} {}\n", mouse_x, mouse_y);
             fmt::print("zoom change from {} to {}\n", zoom, new_zoom);
+
+            double px = double(mouse_x) / width - 0.5;
+            double py = double(mouse_y) / height - 0.5;
+
+            double old_distance_x = range / zoom * px;
+            double new_distance_x = old_distance_x * zoom / new_zoom;
+
+            double old_distance_y = range / zoom * py;
+            double new_distance_y = old_distance_y * zoom / new_zoom;
+
+            double add_shift_x = old_distance_x - new_distance_x;
+            double add_shift_y = old_distance_y - new_distance_y;
+
+            shift_x += add_shift_x;
+            shift_y += add_shift_y;
 
             // use the old bitmap to do interpolation
             // while calculating the new bitmap
@@ -135,6 +150,10 @@ private:
         return true;
     }
 
+    void gen_image()
+    {
+    }
+
     void gen_image(int **bitmap, int length, int height, double zoom)
     {
         total_power_count = 0;
@@ -143,15 +162,15 @@ private:
 
         int center_x = length / 2;
         int center_y = height / 2;
-        double x_shift = -0.8;
+
         double step = 3.3 / length / zoom;
         // assuming 2.0 x 2.0 range
         for (int x = 0; x < length; x++)
         {
-            double x_d = (x - center_x) * step + x_shift;
+            double x_d = (x - center_x) * step + shift_x;
             for (int y = 0; y < height; y++)
             {
-                double y_d = (y - center_y) * step;
+                double y_d = (y - center_y) * step + shift_y;
                 complex_d v{x_d, y_d};
                 uint32_t r = mandelbrot(v);
                 bitmap[x][y] = r;
@@ -172,6 +191,9 @@ private:
     int32_t width;
     int32_t height;
     double zoom = 1.0;
+    double range = 3.0;
+    double shift_x = -0.8;
+    double shift_y = 0.0;
 };
 
 int main()
@@ -179,7 +201,7 @@ int main()
 
     // The following line is used to compile the sample for the game engine.
     // g++ olcExampleProgram.cpp -lpng -lGL -lX11
-    MandelbrotDisplay m(800, 800);
+    MandelbrotDisplay m(300, 300);
 
     m.Start();
 
