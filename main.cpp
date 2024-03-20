@@ -163,7 +163,7 @@ private:
         int center_x = length / 2;
         int center_y = height / 2;
 
-        double step = 3.3 / length / zoom;
+        double step = range / length / zoom;
         // assuming 2.0 x 2.0 range
         for (int x = 0; x < length; x++)
         {
