@@ -3,6 +3,7 @@
 #include <complex>
 #include <iostream>
 #include <fstream>
+#include <fmt/core.h>
 #include "olcPixelGameEngine.h"
 
 using std::complex;
@@ -103,7 +104,10 @@ private:
         }
         if (new_zoom != zoom)
         {
-            std::cout << "zoom change from " << zoom << " to " << new_zoom << "\n";
+            int32_t mouse_x = GetMouseX();
+            int32_t mouse_y = GetMouseY();
+            fmt::print("mouse position {} {}\n", mouse_x, mouse_y);
+            fmt::print("zoom change from {} to {}\n", zoom, new_zoom);
 
             // use the old bitmap to do interpolation
             // while calculating the new bitmap

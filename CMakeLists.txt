@@ -13,4 +13,4 @@ project(julia_mandelbrot)
 
 add_executable(julia_mandelbrot main.cpp)
 
-target_link_libraries(julia_mandelbrot PRIVATE png X11 GL pthread)
+target_link_libraries(julia_mandelbrot PRIVATE png X11 GL pthread fmt)
