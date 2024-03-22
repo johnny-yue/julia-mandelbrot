@@ -161,6 +161,20 @@ private:
         double new_zoom = zoom;
         int32_t mouse_x = GetMouseX();
         int32_t mouse_y = GetMouseY();
+        bool pan_shift = false;
+
+        if (GetMouse(0).bHeld)
+        {
+            // Pan
+            double x_shift_delta = double(mouse_x_old - mouse_x) / width * range / zoom;
+            double y_shift_delta = double(mouse_y_old - mouse_y) / height * range / zoom;
+
+            shift_x += x_shift_delta;
+            shift_y += y_shift_delta;
+
+            pan_shift = true;
+            fmt::print("{},{}, c:{},{}, old{},{}\n", x_shift_delta, y_shift_delta, mouse_x, mouse_y, mouse_x_old, mouse_y_old);
+        }
 
         if (GetMouseWheel() > 0)
         {
@@ -176,7 +190,7 @@ private:
                 new_zoom = 1;
             }
         }
-        if (new_zoom != zoom)
+        if (new_zoom != zoom || pan_shift)
         {
 
             fmt::print("mouse position {} {}\n", mouse_x, mouse_y);
@@ -216,7 +230,7 @@ private:
             if (GPU_CALC)
             {
                 // construct CMAP
-                fmt::print("cpu draw, step{} \n", step);
+                fmt::print("gpu draw, step{} \n", step);
                 auto result = hipMemcpy(cmap_i_device, cmap_i_host, cmap_size, hipMemcpyHostToDevice);
                 result = hipMemcpy(cmap_r_device, cmap_r_host, cmap_size, hipMemcpyHostToDevice);
 
@@ -259,6 +273,9 @@ private:
                 }
             }
         }
+
+        mouse_x_old = mouse_x;
+        mouse_y_old = mouse_y;
 
         // called once per frame
         if (should_draw)
@@ -390,7 +407,7 @@ int main()
 
     // The following line is used to compile the sample for the game engine.
     // g++ olcExampleProgram.cpp -lpng -lGL -lX11
-    MandelbrotDisplay m(300, 300);
+    MandelbrotDisplay m(800, 800);
 
     m.Start();
 
