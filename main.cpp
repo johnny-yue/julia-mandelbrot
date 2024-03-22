@@ -139,10 +139,10 @@ public:
         cmap_i_host = (double *)malloc(cmap_size);
         cmap_r_host = (double *)malloc(cmap_size);
 
-        hipMalloc(&cmap_i_device, cmap_size);
-        hipMalloc(&cmap_r_device, cmap_size);
+        auto result = hipMalloc(&cmap_i_device, cmap_size);
+        result = hipMalloc(&cmap_r_device, cmap_size);
 
-        hipMalloc(&mandelbrot_result_gpu, bitmap_size);
+        result = hipMalloc(&mandelbrot_result_gpu, bitmap_size);
 
         gen_image_mandelbrot(bitmapMandelbrot, width, height, zoom);
         gen_image_julia(bitmapJulia, width, height, 0, 0);
@@ -217,15 +217,15 @@ private:
             {
                 // construct CMAP
                 fmt::print("cpu draw, step{} \n", step);
-                hipMemcpy(cmap_i_device, cmap_i_host, cmap_size, hipMemcpyHostToDevice);
-                hipMemcpy(cmap_r_device, cmap_r_host, cmap_size, hipMemcpyHostToDevice);
+                auto result = hipMemcpy(cmap_i_device, cmap_i_host, cmap_size, hipMemcpyHostToDevice);
+                result = hipMemcpy(cmap_r_device, cmap_r_host, cmap_size, hipMemcpyHostToDevice);
 
                 int thread_n = 256;
                 int block_n = (NPIXEL + 256 - 1) / 256;
 
                 hipLaunchKernelGGL(mandelbrot_gpu, block_n, thread_n, 0, 0, cmap_r_device, cmap_i_device, mandelbrot_result_gpu, NPIXEL);
 
-                hipMemcpy(bitmapMandelbrot, mandelbrot_result_gpu, bitmap_size, hipMemcpyDeviceToHost);
+                result = hipMemcpy(bitmapMandelbrot, mandelbrot_result_gpu, bitmap_size, hipMemcpyDeviceToHost);
             }
             else
             {
