@@ -84,19 +84,60 @@ __global__ void mandelbrot_gpu(double *cr, double *ci, int *bitmap, int NPIXEL)
     int id = blockDim.x * blockIdx.x + threadIdx.x;
     if (id < NPIXEL)
     {
-        complex_d c{cr[id], ci[id]};
+        // complex_d c{cr[id], ci[id]};
+        double x0 = cr[id];
+        double y0 = ci[id];
         int escape = 0;
         double escape_radios = 2.0;
-        complex_d n = c;
+        // complex_d n = c;
         int i = 0;
-        for (; i < MAX_ITERATION; i++)
+        double x = 0.0, x2 = 0.0, y = 0.0, y2 = 0.0;
+
+        double w = 0.0;
+        while (x2 + y2 <= 4 && i < MAX_ITERATION)
         {
-            n = std::pow(n, 2) + c;
-            if (std::abs(n) > escape_radios)
-            {
-                break;
-            }
+            y = 2 * x * y + y0;
+            x = x2 - y2 + x0;
+
+            x2 = x * x;
+            y2 = y * y;
+
+            ++i;
         }
+
+        bitmap[id] = i;
+    }
+}
+
+__global__ void julia_gpu(double *xr, double *xi, double cr, double ci, int *bitmap, int NPIXEL)
+{
+    int id = blockDim.x * blockIdx.x + threadIdx.x;
+    if (id < NPIXEL)
+    {
+        // complex_d c{cr[id], ci[id]};
+        double x0 = cr;
+        double y0 = ci;
+
+        double escape_radios = 2.0;
+        // complex_d n = c;
+        int i = 0;
+        double x = xr[id];
+        double y = xi[id];
+
+        double x2 = x * x;
+        double y2 = y * y;
+        double w = 0.0;
+
+        while (x2 + y2 <= 4 && i < MAX_ITERATION)
+        {
+            double xtemp = x2 - y2;
+            y = 2 * x * y + y0;
+            x = xtemp + x0;
+            x2 = x * x;
+            y2 = y * y;
+            ++i;
+        }
+
         bitmap[id] = i;
     }
 }
@@ -230,7 +271,7 @@ private:
             if (GPU_CALC)
             {
                 // construct CMAP
-                fmt::print("gpu draw, step{} \n", step);
+                fmt::print("gpu draw mandelbrot, step{} \n", step);
                 auto result = hipMemcpy(cmap_i_device, cmap_i_host, cmap_size, hipMemcpyHostToDevice);
                 result = hipMemcpy(cmap_r_device, cmap_r_host, cmap_size, hipMemcpyHostToDevice);
 
@@ -262,14 +303,61 @@ private:
 
         if (mouse_x != mouse_x_old || mouse_y != mouse_y_old)
         {
-            gen_image_julia(bitmapJulia, width, height, mouse_x, mouse_y);
-            // fmt::print("redraw julia");
-            for (int x = 0; x < width; x++)
+            if (GPU_CALC)
             {
-                for (int y = 0; y < height; y++)
+
+                int center_x = width / 2;
+                int center_y = height / 2;
+
+                double step = range / width / zoom;
+                double c_x = (mouse_x - center_x) * step + shift_x;
+                double c_y = (mouse_y - center_y) * step + shift_y;
+
+                double julia_step = range / width;
+                for (int x = 0; x < width; x++)
                 {
-                    int value = bitmapJulia[width * y + x];
-                    Draw(x + width, y, olc::Pixel(value, value, value));
+                    double x_d = (x - center_x) * julia_step;
+                    for (int y = 0; y < height; y++)
+                    {
+                        double y_d = (y - center_y) * julia_step;
+
+                        cmap_r_host[width * y + x] = x_d;
+                        cmap_i_host[width * y + x] = y_d;
+                    }
+                }
+
+                auto result = hipMemcpy(cmap_i_device, cmap_i_host, cmap_size, hipMemcpyHostToDevice);
+                result = hipMemcpy(cmap_r_device, cmap_r_host, cmap_size, hipMemcpyHostToDevice);
+
+                int thread_n = 256;
+                int block_n = (NPIXEL + 256 - 1) / 256;
+
+                // fmt::print("gpu draw julia, block_n:{}, step:{}, c_x:{}, c_y:{} \n", block_n, julia_step, c_x, c_y);
+
+                hipLaunchKernelGGL(julia_gpu, block_n, thread_n, 0, 0, cmap_r_device, cmap_i_device, c_x, c_y, mandelbrot_result_gpu, NPIXEL);
+
+                result = hipMemcpy(bitmapJulia, mandelbrot_result_gpu, bitmap_size, hipMemcpyDeviceToHost);
+
+                for (int x = 0; x < width; x++)
+                {
+                    for (int y = 0; y < height; y++)
+                    {
+                        int value = bitmapJulia[width * y + x];
+                        Draw(x + width, y, olc::Pixel(value, value, value));
+                    }
+                }
+            }
+            else
+            {
+                gen_image_julia(bitmapJulia, width, height, mouse_x, mouse_y);
+                // fmt::print("redraw julia");
+                for (int x = 0; x < width; x++)
+                {
+                    for (int y = 0; y < height; y++)
+                    {
+                        int value = bitmapJulia[width * y + x];
+                        Draw(x + width, y, olc::Pixel(value, value, value));
+                    }
                 }
             }
         }
@@ -407,7 +495,7 @@ int main()
 
     // The following line is used to compile the sample for the game engine.
     // g++ olcExampleProgram.cpp -lpng -lGL -lX11
-    MandelbrotDisplay m(800, 800);
+    MandelbrotDisplay m(1600, 1600);
 
     m.Start();
 
