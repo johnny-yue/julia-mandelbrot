@@ -4,6 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <fmt/core.h>
+#include "hip/hip_runtime.h"
 #include "olcPixelGameEngine.h"
 
 using std::complex;
@@ -11,6 +12,26 @@ using complex_d = std::complex<double>;
 
 constexpr uint32_t MAX_ITERATION = 255;
 constexpr uint32_t N_THREAD = 30;
+
+int GPU_THREAD_N = 256;
+int n_data;
+bool GPU_CALC = true;
+
+void save_to_csv(double *values, std::string name, int width, int height)
+{
+    auto filename = name + ".csv";
+    std::ofstream csv(filename);
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            csv << values[width * y + x] << ",";
+        }
+        csv << "\n";
+    }
+    csv << "\n";
+    csv.close();
+}
 
 static inline int64_t rdsysns()
 {
@@ -58,6 +79,28 @@ uint32_t julia(complex_d x, complex_d c)
     return i;
 }
 
+__global__ void mandelbrot_gpu(double *cr, double *ci, int *bitmap, int NPIXEL)
+{
+    int id = blockDim.x * blockIdx.x + threadIdx.x;
+    if (id < NPIXEL)
+    {
+        complex_d c{cr[id], ci[id]};
+        int escape = 0;
+        double escape_radios = 2.0;
+        complex_d n = c;
+        int i = 0;
+        for (; i < MAX_ITERATION; i++)
+        {
+            n = std::pow(n, 2) + c;
+            if (std::abs(n) > escape_radios)
+            {
+                break;
+            }
+        }
+        bitmap[id] = i;
+    }
+}
+
 void output_image(int **bitmap, int length, int height)
 {
     std::ofstream image;
@@ -84,14 +127,23 @@ public:
     MandelbrotDisplay(int32_t height, int32_t width) : height(height), width(width)
     {
         sAppName = "Mandelbrot Display";
+        NPIXEL = this->width * this->height;
+        // hipFree(NULL);
 
-        bitmapMandelbrot = new int *[width];
-        bitmapJulia = new int *[width];
-        for (int i = 0; i < width; i++)
-        {
-            bitmapMandelbrot[i] = new int[height];
-            bitmapJulia[i] = new int[height];
-        }
+        bitmap_size = width * height * sizeof(int);
+        cmap_size = width * height * sizeof(double);
+
+        bitmapMandelbrot = (int *)malloc(bitmap_size);
+        bitmapJulia = (int *)malloc(bitmap_size);
+
+        cmap_i_host = (double *)malloc(cmap_size);
+        cmap_r_host = (double *)malloc(cmap_size);
+
+        hipMalloc(&cmap_i_device, cmap_size);
+        hipMalloc(&cmap_r_device, cmap_size);
+
+        hipMalloc(&mandelbrot_result_gpu, bitmap_size);
+
         gen_image_mandelbrot(bitmapMandelbrot, width, height, zoom);
         gen_image_julia(bitmapJulia, width, height, 0, 0);
         Construct(width * 2, height, 1, 1);
@@ -145,13 +197,55 @@ private:
             shift_x += add_shift_x;
             shift_y += add_shift_y;
 
-            // use the old bitmap to do interpolation
-            // while calculating the new bitmap
-            gen_image_mandelbrot(bitmapMandelbrot, width, height, new_zoom);
-            zoom = new_zoom;
+            int center_x = width / 2;
+            int center_y = height / 2;
 
-            DrawString(30, 30, std::to_string(new_zoom));
+            double step = range / width / new_zoom;
+
+            for (int x = 0; x < width; x++)
+            {
+                double x_d = (x - center_x) * step + shift_x;
+                for (int y = 0; y < height; y++)
+                {
+                    double y_d = (y - center_y) * step + shift_y;
+                    cmap_r_host[width * y + x] = x_d;
+                    cmap_i_host[width * y + x] = y_d;
+                }
+            }
+
+            if (GPU_CALC)
+            {
+                // construct CMAP
+                fmt::print("cpu draw, step{} \n", step);
+                hipMemcpy(cmap_i_device, cmap_i_host, cmap_size, hipMemcpyHostToDevice);
+                hipMemcpy(cmap_r_device, cmap_r_host, cmap_size, hipMemcpyHostToDevice);
+
+                int thread_n = 256;
+                int block_n = (NPIXEL + 256 - 1) / 256;
+
+                hipLaunchKernelGGL(mandelbrot_gpu, block_n, thread_n, 0, 0, cmap_r_device, cmap_i_device, mandelbrot_result_gpu, NPIXEL);
+
+                hipMemcpy(bitmapMandelbrot, mandelbrot_result_gpu, bitmap_size, hipMemcpyDeviceToHost);
+            }
+            else
+            {
+                // use the old bitmap to do interpolation
+                // while calculating the new bitmap
+                // gen_image_mandelbrot(bitmapMandelbrot, width, height, new_zoom);
+                fmt::print("cpu draw, step{} \n", step);
+                for (int i = 0; i < NPIXEL; i++)
+                {
+                    complex_d c{cmap_r_host[i], cmap_i_host[i]};
+                    uint32_t r = mandelbrot(c);
+                    bitmapMandelbrot[i] = r;
+                }
+            }
+
+            zoom = new_zoom;
+            should_draw = true;
+            // DrawString(30, 30, std::to_string(new_zoom));
         }
+
         if (mouse_x != mouse_x_old || mouse_y != mouse_y_old)
         {
             gen_image_julia(bitmapJulia, width, height, mouse_x, mouse_y);
@@ -160,7 +254,7 @@ private:
             {
                 for (int y = 0; y < height; y++)
                 {
-                    int value = bitmapJulia[x][y];
+                    int value = bitmapJulia[width * y + x];
                     Draw(x + width, y, olc::Pixel(value, value, value));
                 }
             }
@@ -169,36 +263,43 @@ private:
         // called once per frame
         if (should_draw)
         {
+
             std::cout << "redraw with zoom:" << zoom << "\n";
             for (int x = 0; x < width; x++)
             {
                 for (int y = 0; y < height; y++)
                 {
-                    int value = bitmapMandelbrot[x][y];
+                    int value = bitmapMandelbrot[width * y + x];
                     Draw(x, y, olc::Pixel(value, value, value));
                 }
             }
+
             should_draw = false;
         }
+
+        // for (int i = 0; i < 100; i++)
+        // {
+        //     Draw(i, 50, olc::Pixel(50, 150, 100));
+        // }
 
         return true;
     }
 
-    void gen_image_julia(int **bitmap, int length, int height, int x, int y)
+    void gen_image_julia(int *bitmap, int width, int height, int x, int y)
     {
         // compute c with regard to mandelbrot set
-        int center_x = length / 2;
+        int center_x = width / 2;
         int center_y = height / 2;
 
-        double step = range / length / zoom;
+        double step = range / width / zoom;
         double c_x = (x - center_x) * step + shift_x;
         double c_y = (y - center_y) * step + shift_y;
         complex_d c{c_x, c_y};
 
         // reset step for julia generation
-        step = range / length;
+        step = range / width;
 
-        for (int x = 0; x < length; x++)
+        for (int x = 0; x < width; x++)
         {
             double x_d = (x - center_x) * step;
             for (int y = 0; y < height; y++)
@@ -206,12 +307,12 @@ private:
                 double y_d = (y - center_y) * step;
                 complex_d v{x_d, y_d};
                 uint32_t r = julia(v, c);
-                bitmap[x][y] = r;
+                bitmap[width * y + x] = r;
             }
         }
     }
 
-    void gen_image_mandelbrot(int **bitmap, int length, int height, double zoom)
+    void gen_image_mandelbrot(int *bitmap, int length, int height, double zoom)
     {
         total_power_count = 0;
         auto start = rdsysns();
@@ -221,15 +322,35 @@ private:
 
         double step = range / length / zoom;
 
+        memset(cmap_r_host, 0, length * height * sizeof(double));
         for (int x = 0; x < length; x++)
         {
             double x_d = (x - center_x) * step + shift_x;
             for (int y = 0; y < height; y++)
             {
                 double y_d = (y - center_y) * step + shift_y;
+                cmap_r_host[length * y + x] = x_d;
+                cmap_i_host[length * y + x] = y_d;
+                if (x == 0 || x == 1)
+                {
+                    fmt::print("x:{} y:{} i:{} v:{}\n", x, y, x * y + x, x_d);
+                }
+            }
+        }
+
+        // save_to_csv(cmap_r_host, "cmap_r_host", length, height);
+
+        for (int x = 0; x < length; x++)
+        {
+            // double x_d = (x - center_x) * step + shift_x;
+            for (int y = 0; y < height; y++)
+            {
+                // double y_d = (y - center_y) * step + shift_y;
+                double x_d = cmap_r_host[length * y + x];
+                double y_d = cmap_i_host[length * y + x];
                 complex_d v{x_d, y_d};
                 uint32_t r = mandelbrot(v);
-                bitmap[x][y] = r;
+                bitmap[length * y + x] = r;
             }
         }
 
@@ -241,10 +362,21 @@ private:
     }
 
     bool should_draw = true;
-    int **bitmapMandelbrot;
-    int **bitmapJulia;
+    int *bitmapMandelbrot;
+    int *bitmapJulia;
+    int *mandelbrot_result_gpu;
+
+    int cmap_size;
+    int bitmap_size;
+
+    double *cmap_i_host;
+    double *cmap_r_host;
+    double *cmap_i_device;
+    double *cmap_r_device;
+
     int32_t width;
     int32_t height;
+    int NPIXEL;
     double zoom = 1.0;
     double range = 3.0;
     double shift_x = -0.8;
